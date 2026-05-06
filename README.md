@@ -85,7 +85,9 @@ without a DaemonSet restart.
   "version": "v2.4.0",
   "policy": {
     "name": "lateral-movement-baseline",
+    "source_cidrs": ["..."],
     "destination_cidrs": ["..."],
+    "destination_exclude_cidrs": ["..."],
     "rate_limit_pps": 2000,
     "peer_syn_rate_pps": 100,
     "on_exceed": "drop"
@@ -99,10 +101,21 @@ without a DaemonSet restart.
 |---|---|---|
 | `version` | string | Policy schema version |
 | `policy.name` | string | Human-readable policy name |
+| `policy.source_cidrs` | string[] | Optional. Additional source CIDR filter applied on top of the per-namespace `team_pods` set. Empty means "any team pod IP". |
 | `policy.destination_cidrs` | string[] | List of destination CIDRs to enforce rate limiting on. |
-| `policy.rate_limit_pps` | int | Packets per second threshold per source Pod IP for traffic to `destination_cidrs`. |
+| `policy.destination_exclude_cidrs` | string[] | Optional. Destination CIDRs to subtract from `destination_cidrs` (e.g. cluster-internal CIDRs to exclude when `destination_cidrs` is `0.0.0.0/0`). |
+| `policy.rate_limit_pps` | int | Packets per second threshold per source Pod IP for traffic to `destination_cidrs`. Non-positive values (or the field omitted from the JSON) disable the rule entirely with a `WARN` log — nftables rejects `limit rate over 0/second`, so emitting such a rule would fail the whole `nft -f` apply. |
 | `policy.peer_syn_rate_pps` | int | New TCP connection rate threshold per source Pod IP for **intra-namespace peer-to-peer** traffic (saddr ∈ team Pods AND daddr ∈ team Pods). Anti-port-scan / fanout heuristic. Set to `0` to disable. |
 | `policy.on_exceed` | string | Action when rate is exceeded: `drop` |
+
+The destination_cidrs rate-limit rule matches traffic where:
+
+```
+saddr ∈ team_pods
+∧ (source_cidrs empty   ∨ saddr ∈ source_cidrs)
+∧ daddr ∈ destination_cidrs
+∧ (destination_exclude_cidrs empty ∨ daddr ∉ destination_exclude_cidrs)
+```
 
 ### Environment variables
 
@@ -113,6 +126,41 @@ without a DaemonSet restart.
 | `POLICY_FILE` | No | `/tmp/policy.json` | On-disk cache target for fetched policy. Must be writable by the container. |
 | `APISERVER` | No | `https://kubernetes.default.svc` | Kubernetes API server URL. |
 | `REFRESH_INTERVAL` | No | `30` | Seconds between policy refresh cycles. |
+
+### Per-namespace overrides _(v2.5.0+)_
+
+The centrally-managed policy at `POLICY_URL` covers fleet-wide defaults, but
+some environments need to nudge individual fields without forking the policy
+or asking InfoSec to special-case a cluster. The following env vars, when
+set on the container, override the corresponding field of the fetched policy
+in-place after each refresh:
+
+| Variable | Overrides | Format | Notes |
+|---|---|---|---|
+| `POLICY_SOURCE_CIDRS` | `policy.source_cidrs` | comma-separated CIDRs | Optional saddr filter on top of `team_pods`. Whitespace around entries is trimmed. Empty entries are skipped. |
+| `POLICY_DESTINATION_CIDRS` | `policy.destination_cidrs` | comma-separated CIDRs | e.g. `172.16.0.0/12,192.168.0.0/16`. Whitespace around entries is trimmed. Empty entries are skipped. |
+| `POLICY_DESTINATION_EXCLUDE_CIDRS` | `policy.destination_exclude_cidrs` | comma-separated CIDRs | If the env var is **set** (even to an empty string), it replaces the upstream exclude list — an explicit empty value clears it. If the env var is **unset**, the upstream value is preserved. |
+| `POLICY_RATE_LIMIT_PPS` | `policy.rate_limit_pps` | integer | Invalid values are ignored with a `WARN` log. |
+| `POLICY_PEER_SYN_RATE_PPS` | `policy.peer_syn_rate_pps` | integer | `0` disables the rule entirely. Invalid values are ignored with a `WARN` log. |
+
+Unset / empty env vars leave the corresponding field at the value provided
+by `POLICY_URL` (no behavior change for operators not opting in). Override
+parsing happens once at startup; updating a value requires a Pod restart.
+
+Typical use case — shared-VPC EKS where the central baseline's
+`destination_cidrs` overlaps with Pod IPs:
+
+```yaml
+env:
+  - name: POLICY_SOURCE_CIDRS
+    value: "10.0.0.0/8"
+  - name: POLICY_DESTINATION_CIDRS
+    value: "0.0.0.0/0"
+  - name: POLICY_DESTINATION_EXCLUDE_CIDRS
+    value: "10.0.0.0/8"
+  - name: POLICY_PEER_SYN_RATE_PPS
+    value: "5000"
+```
 
 ## Deployment
 

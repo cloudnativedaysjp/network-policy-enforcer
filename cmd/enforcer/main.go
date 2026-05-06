@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -37,6 +38,7 @@ type config struct {
 	policyURL       string
 	apiServer       string
 	refreshInterval time.Duration
+	overrides       policy.Overrides
 }
 
 func main() {
@@ -61,8 +63,10 @@ func main() {
 	if err != nil {
 		log.Fatalf("ERROR: %v", err)
 	}
+	p.Apply(cfg.overrides)
 	log.Printf("network-policy-enforcer %s starting", p.Version)
 	log.Printf("loaded policy: %s (%s)", p.Spec.Name, p.Version)
+	warnIfRulesDisabled(p)
 
 	table := nft.TableName(cfg.teamNS)
 	installSignalHandler(table)
@@ -88,8 +92,10 @@ func runLoop(cfg *config, table string, initialMD5 string, client *k8s.Client) {
 			time.Sleep(cfg.refreshInterval)
 			continue
 		}
+		p.Apply(cfg.overrides)
 		if sum != lastMD5 {
 			log.Printf("policy reloaded (%s)", sum)
+			warnIfRulesDisabled(p)
 			lastMD5 = sum
 		}
 
@@ -131,6 +137,23 @@ func runLoop(cfg *config, table string, initialMD5 string, client *k8s.Client) {
 	}
 }
 
+// warnIfRulesDisabled surfaces non-positive PPS values that silently
+// disable a rule. nftables rejects `limit rate over 0/second`, so a
+// non-positive RateLimitPPS would otherwise blow up the entire `nft -f`
+// apply with a confusing "Invalid argument" — we drop the rule and
+// announce it instead. PeerSYNRatePPS == 0 is a documented disable
+// switch, so we only warn when explicitly negative.
+func warnIfRulesDisabled(p *policy.Policy) {
+	if p.Spec.RateLimitPPS <= 0 {
+		log.Printf("WARN: rate_limit_pps=%d is non-positive; destination_cidrs rule disabled",
+			p.Spec.RateLimitPPS)
+	}
+	if p.Spec.PeerSYNRatePPS < 0 {
+		log.Printf("WARN: peer_syn_rate_pps=%d is negative; peer-SYN rule disabled",
+			p.Spec.PeerSYNRatePPS)
+	}
+}
+
 func installSignalHandler(table string) {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
@@ -156,7 +179,62 @@ func loadConfig() (*config, error) {
 		policyURL:       getenv("POLICY_URL", defaultPolicyURL),
 		apiServer:       getenv("APISERVER", defaultAPIServer),
 		refreshInterval: time.Duration(intervalSec) * time.Second,
+		overrides:       loadOverrides(),
 	}, nil
+}
+
+// loadOverrides parses POLICY_* env vars into a policy.Overrides. Unset
+// or empty env vars leave the corresponding override nil so the upstream
+// value flows through unchanged. Invalid integer values are rejected
+// (logged as WARN; the upstream value is used).
+//
+// Exception: POLICY_DESTINATION_EXCLUDE_CIDRS uses a "set if present"
+// rule rather than "set if non-empty" — an explicitly empty value is
+// retained as an empty list so operators can intentionally clear the
+// upstream exclude list. This is signalled with a pointer-to-slice
+// wrapper inside Overrides.
+func loadOverrides() policy.Overrides {
+	var o policy.Overrides
+	o.SourceCIDRs = parseCIDRList("POLICY_SOURCE_CIDRS")
+	o.DestinationCIDRs = parseCIDRList("POLICY_DESTINATION_CIDRS")
+	if v, ok := os.LookupEnv("POLICY_DESTINATION_EXCLUDE_CIDRS"); ok {
+		cidrs := parseCIDRString(v)
+		o.DestinationExcludeCIDRs = &cidrs
+	}
+	if v := os.Getenv("POLICY_RATE_LIMIT_PPS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			o.RateLimitPPS = &n
+		} else {
+			log.Printf("WARN: invalid POLICY_RATE_LIMIT_PPS=%q, ignoring: %v", v, err)
+		}
+	}
+	if v := os.Getenv("POLICY_PEER_SYN_RATE_PPS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			o.PeerSYNRatePPS = &n
+		} else {
+			log.Printf("WARN: invalid POLICY_PEER_SYN_RATE_PPS=%q, ignoring: %v", v, err)
+		}
+	}
+	return o
+}
+
+func parseCIDRList(envKey string) []string {
+	v := os.Getenv(envKey)
+	if v == "" {
+		return nil
+	}
+	return parseCIDRString(v)
+}
+
+func parseCIDRString(v string) []string {
+	parts := strings.Split(v, ",")
+	cidrs := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if s := strings.TrimSpace(p); s != "" {
+			cidrs = append(cidrs, s)
+		}
+	}
+	return cidrs
 }
 
 func getenv(key, fallback string) string {
