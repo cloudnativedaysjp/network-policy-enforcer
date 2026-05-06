@@ -27,6 +27,17 @@ func TableName(ns string) string {
 
 // Render generates the nftables `inet` table for the given table name,
 // pod IPs, and policy. The output is intended to be passed to `nft -f`.
+//
+// Match semantics for the destination_cidrs rate-limit rule:
+//
+//	saddr ∈ team_pods
+//	∧ (SourceCIDRs empty   ∨ saddr ∈ SourceCIDRs)
+//	∧ daddr ∈ DestinationCIDRs
+//	∧ (DestinationExcludeCIDRs empty ∨ daddr ∉ DestinationExcludeCIDRs)
+//
+// team_pods is always required (it is the per-namespace scope guard);
+// SourceCIDRs is an additional saddr filter for operators who want to
+// constrain the rate-limit further than "any pod in the namespace".
 func Render(table string, podIPs []string, p *policy.Policy) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "table inet %s {\n", table)
@@ -43,9 +54,19 @@ func Render(table string, podIPs []string, p *policy.Policy) string {
 			"    ip saddr @team_pods ip daddr @team_pods tcp flags & (syn|ack) == syn meter peer_syn_per_src size 65535 { ip saddr timeout 60s limit rate over %d/second } log prefix \"peer_syn_drop: \" counter name \"peer_syn_drop_total\" drop\n",
 			p.Spec.PeerSYNRatePPS)
 	}
+
+	var match strings.Builder
+	match.WriteString("ip saddr @team_pods")
+	if len(p.Spec.SourceCIDRs) > 0 {
+		fmt.Fprintf(&match, " ip saddr { %s }", strings.Join(p.Spec.SourceCIDRs, ", "))
+	}
+	fmt.Fprintf(&match, " ip daddr { %s }", strings.Join(p.Spec.DestinationCIDRs, ", "))
+	if len(p.Spec.DestinationExcludeCIDRs) > 0 {
+		fmt.Fprintf(&match, " ip daddr != { %s }", strings.Join(p.Spec.DestinationExcludeCIDRs, ", "))
+	}
 	fmt.Fprintf(&b,
-		"    ip saddr @team_pods ip daddr { %s } meter per_src size 65535 { ip saddr timeout 60s limit rate over %d/second } log prefix \"zte_drop: \" counter name \"zte_drop_total\" drop\n",
-		strings.Join(p.Spec.DestinationCIDRs, ", "), p.Spec.RateLimitPPS)
+		"    %s meter per_src size 65535 { ip saddr timeout 60s limit rate over %d/second } log prefix \"zte_drop: \" counter name \"zte_drop_total\" drop\n",
+		match.String(), p.Spec.RateLimitPPS)
 	fmt.Fprintln(&b, "  }")
 	fmt.Fprintln(&b, "}")
 	return b.String()

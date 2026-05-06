@@ -20,12 +20,14 @@ type Policy struct {
 
 // Spec holds the actual rule parameters.
 type Spec struct {
-	Name             string   `json:"name"`
-	Description      string   `json:"description,omitempty"`
-	DestinationCIDRs []string `json:"destination_cidrs"`
-	RateLimitPPS     int      `json:"rate_limit_pps"`
-	PeerSYNRatePPS   int      `json:"peer_syn_rate_pps"`
-	OnExceed         string   `json:"on_exceed"`
+	Name                    string   `json:"name"`
+	Description             string   `json:"description,omitempty"`
+	SourceCIDRs             []string `json:"source_cidrs,omitempty"`
+	DestinationCIDRs        []string `json:"destination_cidrs"`
+	DestinationExcludeCIDRs []string `json:"destination_exclude_cidrs,omitempty"`
+	RateLimitPPS            int      `json:"rate_limit_pps"`
+	PeerSYNRatePPS          int      `json:"peer_syn_rate_pps"`
+	OnExceed                string   `json:"on_exceed"`
 }
 
 // Load reads and parses a policy file from disk. The returned md5 hex
@@ -87,9 +89,11 @@ func parse(data []byte, source string) (*Policy, string, error) {
 // central baseline at POLICY_URL stays the source of truth for everything
 // else.
 type Overrides struct {
-	DestinationCIDRs []string
-	RateLimitPPS     *int
-	PeerSYNRatePPS   *int
+	SourceCIDRs             []string
+	DestinationCIDRs        []string
+	DestinationExcludeCIDRs *[]string
+	RateLimitPPS            *int
+	PeerSYNRatePPS          *int
 }
 
 // Apply mutates p in-place, replacing fields for which the corresponding
@@ -97,8 +101,18 @@ type Overrides struct {
 // existing md5 reload path keeps observing the upstream policy content
 // (the override is a constant; the fetched payload is what varies).
 func (p *Policy) Apply(o Overrides) {
+	if len(o.SourceCIDRs) > 0 {
+		p.Spec.SourceCIDRs = o.SourceCIDRs
+	}
 	if len(o.DestinationCIDRs) > 0 {
 		p.Spec.DestinationCIDRs = o.DestinationCIDRs
+	}
+	// DestinationExcludeCIDRs uses a pointer wrapper so the env var being
+	// set to an empty string is distinguishable from being unset: an empty
+	// override explicitly clears any upstream-provided exclude list, while
+	// a nil override leaves it alone.
+	if o.DestinationExcludeCIDRs != nil {
+		p.Spec.DestinationExcludeCIDRs = *o.DestinationExcludeCIDRs
 	}
 	if o.RateLimitPPS != nil {
 		p.Spec.RateLimitPPS = *o.RateLimitPPS

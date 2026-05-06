@@ -168,17 +168,19 @@ func loadConfig() (*config, error) {
 // or empty env vars leave the corresponding override nil so the upstream
 // value flows through unchanged. Invalid integer values are rejected
 // (logged as WARN; the upstream value is used).
+//
+// Exception: POLICY_DESTINATION_EXCLUDE_CIDRS uses a "set if present"
+// rule rather than "set if non-empty" — an explicitly empty value is
+// retained as an empty list so operators can intentionally clear the
+// upstream exclude list. This is signalled with a pointer-to-slice
+// wrapper inside Overrides.
 func loadOverrides() policy.Overrides {
 	var o policy.Overrides
-	if v := os.Getenv("POLICY_DESTINATION_CIDRS"); v != "" {
-		parts := strings.Split(v, ",")
-		cidrs := make([]string, 0, len(parts))
-		for _, p := range parts {
-			if s := strings.TrimSpace(p); s != "" {
-				cidrs = append(cidrs, s)
-			}
-		}
-		o.DestinationCIDRs = cidrs
+	o.SourceCIDRs = parseCIDRList("POLICY_SOURCE_CIDRS")
+	o.DestinationCIDRs = parseCIDRList("POLICY_DESTINATION_CIDRS")
+	if v, ok := os.LookupEnv("POLICY_DESTINATION_EXCLUDE_CIDRS"); ok {
+		cidrs := parseCIDRString(v)
+		o.DestinationExcludeCIDRs = &cidrs
 	}
 	if v := os.Getenv("POLICY_RATE_LIMIT_PPS"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
@@ -195,6 +197,25 @@ func loadOverrides() policy.Overrides {
 		}
 	}
 	return o
+}
+
+func parseCIDRList(envKey string) []string {
+	v := os.Getenv(envKey)
+	if v == "" {
+		return nil
+	}
+	return parseCIDRString(v)
+}
+
+func parseCIDRString(v string) []string {
+	parts := strings.Split(v, ",")
+	cidrs := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if s := strings.TrimSpace(p); s != "" {
+			cidrs = append(cidrs, s)
+		}
+	}
+	return cidrs
 }
 
 func getenv(key, fallback string) string {

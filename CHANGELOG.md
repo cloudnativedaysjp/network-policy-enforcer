@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `policy.source_cidrs` and `policy.destination_exclude_cidrs` policy fields,
+  with corresponding `POLICY_SOURCE_CIDRS` and `POLICY_DESTINATION_EXCLUDE_CIDRS`
+  env-var overrides. The destination_cidrs rate-limit rule now matches traffic
+  where `saddr ∈ team_pods ∧ (source_cidrs empty ∨ saddr ∈ source_cidrs) ∧
+  daddr ∈ destination_cidrs ∧ (exclude empty ∨ daddr ∉ exclude)`. This lets
+  operators express "all egress except cluster-internal CIDRs" by setting
+  `destination_cidrs=0.0.0.0/0` and excluding the cluster CIDR.
+- `POLICY_DESTINATION_EXCLUDE_CIDRS` distinguishes "unset" from "explicitly
+  empty": setting the env var to an empty string clears any upstream-provided
+  exclude list, while leaving it unset preserves the upstream value.
+
 ## [v2.5.0-rc.1]
 
 Pre-release. See [#1](https://github.com/cloudnativedaysjp/network-policy-enforcer/issues/1)
