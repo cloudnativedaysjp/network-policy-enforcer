@@ -82,10 +82,12 @@ without a DaemonSet restart.
 
 ```json
 {
-  "version": "v2.4.0",
+  "version": "v2.5.0",
   "policy": {
     "name": "lateral-movement-baseline",
+    "source_cidrs": ["..."],
     "destination_cidrs": ["..."],
+    "destination_exclude_cidrs": ["..."],
     "rate_limit_pps": 2000,
     "peer_syn_rate_pps": 100,
     "on_exceed": "drop"
@@ -99,10 +101,21 @@ without a DaemonSet restart.
 |---|---|---|
 | `version` | string | Policy schema version |
 | `policy.name` | string | Human-readable policy name |
+| `policy.source_cidrs` | string[] | Optional. Additional source CIDR filter applied on top of the per-namespace `team_pods` set. Empty means "any team pod IP". |
 | `policy.destination_cidrs` | string[] | List of destination CIDRs to enforce rate limiting on. |
-| `policy.rate_limit_pps` | int | Packets per second threshold per source Pod IP for traffic to `destination_cidrs`. |
+| `policy.destination_exclude_cidrs` | string[] | Optional. Destination CIDRs to subtract from `destination_cidrs` (e.g. cluster-internal CIDRs to exclude when `destination_cidrs` is `0.0.0.0/0`). |
+| `policy.rate_limit_pps` | int | Packets per second threshold per source Pod IP for traffic to `destination_cidrs`. Non-positive values (or the field omitted from the JSON) disable the rule entirely with a `WARN` log — nftables rejects `limit rate over 0/second`, so emitting such a rule would fail the whole `nft -f` apply. |
 | `policy.peer_syn_rate_pps` | int | New TCP connection rate threshold per source Pod IP for **intra-namespace peer-to-peer** traffic (saddr ∈ team Pods AND daddr ∈ team Pods). Anti-port-scan / fanout heuristic. Set to `0` to disable. |
 | `policy.on_exceed` | string | Action when rate is exceeded: `drop` |
+
+The destination_cidrs rate-limit rule matches traffic where:
+
+```
+saddr ∈ team_pods
+∧ (source_cidrs empty   ∨ saddr ∈ source_cidrs)
+∧ daddr ∈ destination_cidrs
+∧ (destination_exclude_cidrs empty ∨ daddr ∉ destination_exclude_cidrs)
+```
 
 ### Environment variables
 
