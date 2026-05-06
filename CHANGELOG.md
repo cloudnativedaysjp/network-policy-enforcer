@@ -7,20 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
-
-- `policy.source_cidrs` and `policy.destination_exclude_cidrs` policy fields,
-  with corresponding `POLICY_SOURCE_CIDRS` and `POLICY_DESTINATION_EXCLUDE_CIDRS`
-  env-var overrides. The destination_cidrs rate-limit rule now matches traffic
-  where `saddr ∈ team_pods ∧ (source_cidrs empty ∨ saddr ∈ source_cidrs) ∧
-  daddr ∈ destination_cidrs ∧ (exclude empty ∨ daddr ∉ exclude)`. This lets
-  operators express "all egress except cluster-internal CIDRs" by setting
-  `destination_cidrs=0.0.0.0/0` and excluding the cluster CIDR.
-- `POLICY_DESTINATION_EXCLUDE_CIDRS` distinguishes "unset" from "explicitly
-  empty": setting the env var to an empty string clears any upstream-provided
-  exclude list, while leaving it unset preserves the upstream value.
-
 ## [v2.5.0-rc.1]
+
+### Fixed
+
+- `rate_limit_pps` values `<= 0` (including the implicit `0` produced
+  when the field is omitted from the upstream policy JSON) no longer
+  blow up the entire `nft -f` apply. nftables rejects
+  `limit rate over 0/second` as `Invalid argument`, which previously
+  left the namespace with no table at all and recurring
+  `policy load failed` log lines. The destination_cidrs rule is now
+  skipped under those conditions and a `WARN` is logged so the
+  disabled state is visible.
+
+## [v2.5.0-rc.0]
 
 Pre-release. See [#1](https://github.com/cloudnativedaysjp/network-policy-enforcer/issues/1)
 for the original report and design discussion.
@@ -35,6 +35,16 @@ for the original report and design discussion.
   - `POLICY_DESTINATION_CIDRS` — comma-separated CIDRs.
   - `POLICY_RATE_LIMIT_PPS` — integer.
   - `POLICY_PEER_SYN_RATE_PPS` — integer; `0` disables the rule.
+- `policy.source_cidrs` and `policy.destination_exclude_cidrs` policy fields,
+  with corresponding `POLICY_SOURCE_CIDRS` and `POLICY_DESTINATION_EXCLUDE_CIDRS`
+  env-var overrides. The destination_cidrs rate-limit rule now matches traffic
+  where `saddr ∈ team_pods ∧ (source_cidrs empty ∨ saddr ∈ source_cidrs) ∧
+  daddr ∈ destination_cidrs ∧ (exclude empty ∨ daddr ∉ exclude)`. This lets
+  operators express "all egress except cluster-internal CIDRs" by setting
+  `destination_cidrs=0.0.0.0/0` and excluding the cluster CIDR.
+- `POLICY_DESTINATION_EXCLUDE_CIDRS` distinguishes "unset" from "explicitly
+  empty": setting the env var to an empty string clears any upstream-provided
+  exclude list, while leaving it unset preserves the upstream value.
 
 ### Changed
 

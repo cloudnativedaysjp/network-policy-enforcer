@@ -66,6 +66,7 @@ func main() {
 	p.Apply(cfg.overrides)
 	log.Printf("network-policy-enforcer %s starting", p.Version)
 	log.Printf("loaded policy: %s (%s)", p.Spec.Name, p.Version)
+	warnIfRulesDisabled(p)
 
 	table := nft.TableName(cfg.teamNS)
 	installSignalHandler(table)
@@ -94,6 +95,7 @@ func runLoop(cfg *config, table string, initialMD5 string, client *k8s.Client) {
 		p.Apply(cfg.overrides)
 		if sum != lastMD5 {
 			log.Printf("policy reloaded (%s)", sum)
+			warnIfRulesDisabled(p)
 			lastMD5 = sum
 		}
 
@@ -132,6 +134,23 @@ func runLoop(cfg *config, table string, initialMD5 string, client *k8s.Client) {
 		}
 
 		time.Sleep(cfg.refreshInterval)
+	}
+}
+
+// warnIfRulesDisabled surfaces non-positive PPS values that silently
+// disable a rule. nftables rejects `limit rate over 0/second`, so a
+// non-positive RateLimitPPS would otherwise blow up the entire `nft -f`
+// apply with a confusing "Invalid argument" — we drop the rule and
+// announce it instead. PeerSYNRatePPS == 0 is a documented disable
+// switch, so we only warn when explicitly negative.
+func warnIfRulesDisabled(p *policy.Policy) {
+	if p.Spec.RateLimitPPS <= 0 {
+		log.Printf("WARN: rate_limit_pps=%d is non-positive; destination_cidrs rule disabled",
+			p.Spec.RateLimitPPS)
+	}
+	if p.Spec.PeerSYNRatePPS < 0 {
+		log.Printf("WARN: peer_syn_rate_pps=%d is negative; peer-SYN rule disabled",
+			p.Spec.PeerSYNRatePPS)
 	}
 }
 
