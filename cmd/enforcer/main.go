@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -37,6 +38,7 @@ type config struct {
 	policyURL       string
 	apiServer       string
 	refreshInterval time.Duration
+	overrides       policy.Overrides
 }
 
 func main() {
@@ -61,6 +63,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("ERROR: %v", err)
 	}
+	p.Apply(cfg.overrides)
 	log.Printf("network-policy-enforcer %s starting", p.Version)
 	log.Printf("loaded policy: %s (%s)", p.Spec.Name, p.Version)
 
@@ -88,6 +91,7 @@ func runLoop(cfg *config, table string, initialMD5 string, client *k8s.Client) {
 			time.Sleep(cfg.refreshInterval)
 			continue
 		}
+		p.Apply(cfg.overrides)
 		if sum != lastMD5 {
 			log.Printf("policy reloaded (%s)", sum)
 			lastMD5 = sum
@@ -156,7 +160,41 @@ func loadConfig() (*config, error) {
 		policyURL:       getenv("POLICY_URL", defaultPolicyURL),
 		apiServer:       getenv("APISERVER", defaultAPIServer),
 		refreshInterval: time.Duration(intervalSec) * time.Second,
+		overrides:       loadOverrides(),
 	}, nil
+}
+
+// loadOverrides parses POLICY_* env vars into a policy.Overrides. Unset
+// or empty env vars leave the corresponding override nil so the upstream
+// value flows through unchanged. Invalid integer values are rejected
+// (logged as WARN; the upstream value is used).
+func loadOverrides() policy.Overrides {
+	var o policy.Overrides
+	if v := os.Getenv("POLICY_DESTINATION_CIDRS"); v != "" {
+		parts := strings.Split(v, ",")
+		cidrs := make([]string, 0, len(parts))
+		for _, p := range parts {
+			if s := strings.TrimSpace(p); s != "" {
+				cidrs = append(cidrs, s)
+			}
+		}
+		o.DestinationCIDRs = cidrs
+	}
+	if v := os.Getenv("POLICY_RATE_LIMIT_PPS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			o.RateLimitPPS = &n
+		} else {
+			log.Printf("WARN: invalid POLICY_RATE_LIMIT_PPS=%q, ignoring: %v", v, err)
+		}
+	}
+	if v := os.Getenv("POLICY_PEER_SYN_RATE_PPS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			o.PeerSYNRatePPS = &n
+		} else {
+			log.Printf("WARN: invalid POLICY_PEER_SYN_RATE_PPS=%q, ignoring: %v", v, err)
+		}
+	}
+	return o
 }
 
 func getenv(key, fallback string) string {

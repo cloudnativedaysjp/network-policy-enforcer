@@ -75,3 +75,35 @@ func parse(data []byte, source string) (*Policy, string, error) {
 	sum := md5.Sum(data)
 	return &p, fmt.Sprintf("%x", sum), nil
 }
+
+// Overrides carries per-deployment overrides for individual policy fields.
+// A nil pointer / zero-length slice means "leave the upstream value alone";
+// any non-empty value replaces the corresponding field in-place.
+//
+// This is the escape hatch for environments where the centrally-managed
+// policy at POLICY_URL is too aggressive (e.g. shared-VPC EKS clusters
+// where Pod IPs overlap with the policy's destination_cidrs). Operators
+// scope overrides to a single DaemonSet via container env vars; the
+// central baseline at POLICY_URL stays the source of truth for everything
+// else.
+type Overrides struct {
+	DestinationCIDRs []string
+	RateLimitPPS     *int
+	PeerSYNRatePPS   *int
+}
+
+// Apply mutates p in-place, replacing fields for which the corresponding
+// override is set. Designed to be called immediately after Load so the
+// existing md5 reload path keeps observing the upstream policy content
+// (the override is a constant; the fetched payload is what varies).
+func (p *Policy) Apply(o Overrides) {
+	if len(o.DestinationCIDRs) > 0 {
+		p.Spec.DestinationCIDRs = o.DestinationCIDRs
+	}
+	if o.RateLimitPPS != nil {
+		p.Spec.RateLimitPPS = *o.RateLimitPPS
+	}
+	if o.PeerSYNRatePPS != nil {
+		p.Spec.PeerSYNRatePPS = *o.PeerSYNRatePPS
+	}
+}

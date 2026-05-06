@@ -114,6 +114,35 @@ without a DaemonSet restart.
 | `APISERVER` | No | `https://kubernetes.default.svc` | Kubernetes API server URL. |
 | `REFRESH_INTERVAL` | No | `30` | Seconds between policy refresh cycles. |
 
+### Per-namespace overrides _(v2.5.0+)_
+
+The centrally-managed policy at `POLICY_URL` covers fleet-wide defaults, but
+some environments need to nudge individual fields without forking the policy
+or asking InfoSec to special-case a cluster. The following env vars, when
+set on the container, override the corresponding field of the fetched policy
+in-place after each refresh:
+
+| Variable | Overrides | Format | Notes |
+|---|---|---|---|
+| `POLICY_DESTINATION_CIDRS` | `policy.destination_cidrs` | comma-separated CIDRs | e.g. `172.16.0.0/12,192.168.0.0/16`. Whitespace around entries is trimmed. Empty entries are skipped. |
+| `POLICY_RATE_LIMIT_PPS` | `policy.rate_limit_pps` | integer | Invalid values are ignored with a `WARN` log. |
+| `POLICY_PEER_SYN_RATE_PPS` | `policy.peer_syn_rate_pps` | integer | `0` disables the rule entirely. Invalid values are ignored with a `WARN` log. |
+
+Unset / empty env vars leave the corresponding field at the value provided
+by `POLICY_URL` (no behavior change for operators not opting in). Override
+parsing happens once at startup; updating a value requires a Pod restart.
+
+Typical use case — shared-VPC EKS where the central baseline's
+`destination_cidrs` overlaps with Pod IPs:
+
+```yaml
+env:
+  - name: POLICY_DESTINATION_CIDRS
+    value: "172.16.0.0/12,192.168.0.0/16"
+  - name: POLICY_PEER_SYN_RATE_PPS
+    value: "5000"
+```
+
 ## Deployment
 
 Deploy as a DaemonSet with `hostNetwork: true` and `NET_ADMIN` capability.
