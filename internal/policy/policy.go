@@ -20,12 +20,14 @@ type Policy struct {
 
 // Spec holds the actual rule parameters.
 type Spec struct {
-	Name             string   `json:"name"`
-	Description      string   `json:"description,omitempty"`
-	DestinationCIDRs []string `json:"destination_cidrs"`
-	RateLimitPPS     int      `json:"rate_limit_pps"`
-	PeerSYNRatePPS   int      `json:"peer_syn_rate_pps"`
-	OnExceed         string   `json:"on_exceed"`
+	Name                    string   `json:"name"`
+	Description             string   `json:"description,omitempty"`
+	SourceCIDRs             []string `json:"source_cidrs,omitempty"`
+	DestinationCIDRs        []string `json:"destination_cidrs"`
+	DestinationExcludeCIDRs []string `json:"destination_exclude_cidrs,omitempty"`
+	RateLimitPPS            int      `json:"rate_limit_pps"`
+	PeerSYNRatePPS          int      `json:"peer_syn_rate_pps"`
+	OnExceed                string   `json:"on_exceed"`
 }
 
 // Load reads and parses a policy file from disk. The returned md5 hex
